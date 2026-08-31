@@ -217,6 +217,14 @@ app.add_middleware(
 )
 # ==========================================
 
+@app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
+async def root():
+    return {
+        "status": "ok",
+        "service": "Privacy-Preserving Agentic Resume Auditor",
+        "docs": "/docs",
+    }
+
 class AuditCreateRequest(BaseModel):
     submission_type: str = Field(default="resume", examples=["resume"])
     raw_text: str = Field(
