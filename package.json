@@ -1,0 +1,19 @@
+{
+  "name": "vailaudit-x402-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CVhelper / VailAudit frontend — x402 payment client for the Algorand Testnet, settled via the GoPlausible facilitator.",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/x402-client.js --bundle --format=iife --outfile=dist/x402-client.bundle.js",
+    "watch": "npm run build -- --watch"
+  },
+  "dependencies": {
+    "@x402-avm/core": "^2.0.0",
+    "@x402-avm/avm": "^2.0.0",
+    "@perawallet/connect": "^1.3.4"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
+}

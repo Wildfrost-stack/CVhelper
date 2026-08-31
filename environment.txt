@@ -1,2 +1,0 @@
-$env:DATABASE_URL=postgresql+asyncpg://postgres:postgreSQL@localhost:5432/postgres
-$env:GROQ_API_KEY=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

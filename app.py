@@ -1,13 +1,20 @@
 import os
 import re
 import asyncio
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Load .env explicitly (don't rely on it being loaded as a side effect of
+# importing ai.py). override=False keeps any real environment variables
+# (e.g. set in your shell or a deployment platform) taking precedence.
+load_dotenv(override=False)
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from typing import Optional, List
 
 import jwt
 import io
-from fastapi import FastAPI, HTTPException, Depends, status, File, UploadFile, Form
+from fastapi import FastAPI, HTTPException, Depends, status, File, UploadFile, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pypdf import PdfReader
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -20,6 +27,14 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # Import Agent Functions from ai.py
 from ai import run_privacy_agent, run_auditor_agent, run_scoring_agent, PrivacyAgentError
+
+# x402 (Algorand/AVM) payment gate — GoPlausible facilitator
+from x402.http import FacilitatorConfig, HTTPFacilitatorClient, PaymentOption
+from x402.http.middleware.fastapi import PaymentMiddlewareASGI
+from x402.http.types import RouteConfig
+from x402.mechanisms.avm import ALGORAND_TESTNET_CAIP2
+from x402.mechanisms.avm.exact import ExactAvmServerScheme
+from x402.server import x402ResourceServer
 
 # ==========================================
 # 1. DATABASE CONFIGURATION & MODELS
@@ -141,6 +156,54 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan
 )
+
+# ==========================================
+# X402 PAYMENT CONFIGURATION (Algorand Testnet, GoPlausible facilitator)
+# ==========================================
+AVM_ADDRESS = os.getenv("AVM_ADDRESS")
+FACILITATOR_URL = os.getenv("FACILITATOR_URL", "https://facilitator.goplausible.xyz")
+X402_PRICE = os.getenv("X402_PRICE", "$0.01")  # per-audit price, tune for demo
+
+if not AVM_ADDRESS:
+    _env_path = Path(".env").resolve()
+    _stray_txt = Path(".env.txt").resolve()
+    _hint_lines = [
+        "",
+        "AVM_ADDRESS is not set. Checklist:",
+        f"  1. Does a .env file exist here?  {_env_path}  -> {'FOUND' if _env_path.exists() else 'MISSING'}",
+        (
+            f"     Note: {_stray_txt} exists -- Windows may have saved your .env as .env.txt. "
+            "Rename it to remove the .txt extension."
+            if _stray_txt.exists() else
+            "     (No stray .env.txt found next to it, so that's not the issue.)"
+        ),
+        "  2. Does it contain a line like:  AVM_ADDRESS=YOUR_58_CHAR_TESTNET_ADDRESS  (no quotes, no spaces around =)",
+        "  3. Is uvicorn being run from this same directory (so the relative .env path above resolves correctly)?",
+        "  4. Is python-dotenv installed?  pip show python-dotenv",
+    ]
+    raise ValueError(
+        "AVM_ADDRESS environment variable is required for x402 payments." + "\n".join(_hint_lines)
+    )
+
+_facilitator = HTTPFacilitatorClient(FacilitatorConfig(url=FACILITATOR_URL))
+_x402_server = x402ResourceServer(_facilitator)
+_x402_server.register(ALGORAND_TESTNET_CAIP2, ExactAvmServerScheme())
+
+_x402_routes = {
+    # Gates the public, unauthenticated endpoint the frontend calls.
+    "POST /api/audit": RouteConfig(
+        accepts=PaymentOption(
+            scheme="exact",
+            pay_to=AVM_ADDRESS,
+            price=X402_PRICE,
+            network=ALGORAND_TESTNET_CAIP2,
+        ),
+        description="Privacy-preserving resume audit",
+        mime_type="application/json",
+    ),
+}
+
+app.add_middleware(PaymentMiddlewareASGI, routes=_x402_routes, server=_x402_server)
 
 # ==========================================
 # ADD CORS MIDDLEWARE HERE
@@ -358,11 +421,18 @@ async def process_pdf_audit(
 # can call it directly. Every audit is still saved to the database.
 @app.post("/api/audit")
 async def public_audit(
+    request: Request,
     job_role: str = Form("resume"),
     text: Optional[str] = Form(None),
     file: Optional[UploadFile] = File(None),
     db: AsyncSession = Depends(get_db),
 ):
+    # x402 middleware stores the verified payment here once settled
+    payment_payload = getattr(request.state, "payment_payload", None)
+    payer_address = (
+        payment_payload.payload.get("from") if payment_payload else None
+    )
+
     try:
         if file is not None:
             if not file.filename.lower().endswith(".pdf"):

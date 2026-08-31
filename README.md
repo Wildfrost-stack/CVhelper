@@ -1,79 +1,126 @@
-# CVhelper — connecting the three files
+# CVhelper / VailAudit — Privacy-Preserving Agentic Resume Auditor
 
-## How the pieces fit
+Two AI agents run in sequence over every resume or code submission:
 
-- **`cvhelper.html`** — the whole website. It's a single static file with a
-  `fetch()` call baked in:
-  `POST http://localhost:8000/api/audit` with `job_role` + either `text` or
-  a PDF `file`, expecting back
-  `{ sanitized_text, entity_types, entities_redacted, scores: [{label, score}], review, llm_provider }`.
-  If that call fails for any reason, it silently falls back to a fake
-  in-browser mock — which is why it "worked" before but never touched your
-  real backend.
-- **`app.py`** — the FastAPI server. Originally it only exposed
-  `/api/v1/audit` (JSON body, requires a JWT login) — a different shape and
-  a different URL than what the HTML calls. I added a new **`POST /api/audit`**
-  route that matches the HTML's contract exactly, with no login required
-  (the page has no login UI, so a protected `/api/v1/...` route was
-  unreachable from it). Every request still gets saved to the database.
-- **`ai.py`** — the Groq-backed agents. It had a privacy redactor and a
-  markdown-report auditor, but nothing that returns the four numeric scores
-  the HTML's progress bars need. I added **`run_scoring_agent()`**, which
-  asks the model for a small structured JSON object of 4 scores instead of
-  free-text.
+1. **Agent 1 — Privacy Officer** (`run_privacy_agent`) strips names, emails,
+   phone numbers, and locations before anything is evaluated. This fails
+   *closed* — if redaction can't be completed, the request is rejected
+   rather than falling back to raw text (`PrivacyAgentError`).
+2. **Agent 2 — Auditor / Scorer** (`run_auditor_agent`, `run_scoring_agent`)
+   scores the redacted submission on merit only, with zero identity signal
+   in the loop.
 
-## What I changed
+Access to the public audit endpoint is metered with **x402** on the
+**Algorand Testnet**, settled through the **GoPlausible facilitator**.
 
-| File | Change |
-|---|---|
-| `ai.py` | Added `run_scoring_agent()` — returns `{"labels": [...], "scores": [...]}` |
-| `app.py` | Added `POST /api/audit` (matches the HTML's contract); loosened CORS to `allow_origins=["*"]` since the page has no cookies to protect |
-| `cvhelper.html` | No changes needed — it already points at `http://localhost:8000` |
+```
+.
+├── app.py                  # FastAPI backend: auth, DB, x402 payment gate, routes
+├── ai.py                   # Groq-backed agent functions used by app.py
+├── requirements.txt        # Python backend dependencies
+├── VailAudit.html           # Static frontend (landing page + live demo)
+├── package.json             # Frontend deps: @x402-avm/*, @perawallet/connect
+├── src/
+│   └── x402-client.js       # Wallet connect + x402 payment client (source)
+└── dist/
+    └── x402-client.bundle.js  # Built output — created by `npm run build`
+```
 
-## Running it
+## 1. Backend setup
 
-1. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
 
-2. **Set environment variables** — copy `.env.example` to `.env` and fill in:
-   - `GROQ_API_KEY` — free key from https://console.groq.com/keys
-   - `DATABASE_URL` — needs a running Postgres instance by default.
-     If you don't want to set up Postgres, swap it for SQLite instead —
-     change the `DATABASE_URL` default in `app.py` to:
-     ```
-     sqlite+aiosqlite:///./cvhelper.db
-     ```
-     and add `aiosqlite` to `requirements.txt`.
+Create a `.env` file next to `app.py`:
 
-3. **Start the backend**
-   ```bash
-   uvicorn app:app --reload --port 8000
-   ```
-   Leave this running — it's your API server at `http://localhost:8000`.
+```bash
+# --- LLM ---
+GROQ_API_KEY=your_groq_api_key
 
-4. **Open the website** — just double-click `cvhelper.html`, or serve it
-   so it isn't a `file://` URL:
-   ```bash
-   python -m http.server 5500
-   ```
-   then visit `http://localhost:5500/cvhelper.html`.
+# --- Auth ---
+JWT_SECRET_KEY=change-me-in-production
 
-5. **Use it** — paste resume text or upload a PDF, pick a role, click run.
-   The terminal log will show it hitting the real backend instead of the
-   "Backend unreachable" mock path.
+# --- Database ---
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/postgres
 
-## Notes / things worth knowing
+# --- x402 payments (Algorand Testnet, GoPlausible facilitator) ---
+AVM_ADDRESS=YOUR_ALGORAND_TESTNET_RECEIVING_ADDRESS
+FACILITATOR_URL=https://facilitator.goplausible.xyz
+X402_PRICE=$0.01
+```
 
-- The public `/api/audit` endpoint has no auth, by design — anyone who can
-  reach your server can call it and burn your Groq quota. Fine for local
-  dev/demo; if you deploy this publicly, add rate limiting or reuse the
-  existing JWT flow (`/register` + `/token`) and update the HTML to log in
-  first.
-- The old `/api/v1/audit`, `/api/v1/audit/pdf`, and `/api/v1/audits`
-  endpoints still work exactly as before (JWT-protected) — nothing there
-  was removed, in case you build an authenticated admin view later.
-- `run_scoring_agent()` falls back to a fixed default (`60/100` on all four
-  axes) if the model returns malformed JSON, so a bad LLM response never
-  crashes the request.
+`AVM_ADDRESS` must be a testnet address you control — this is where audit
+payments settle. `app.py` will refuse to start without it.
+
+Run the API:
+
+```bash
+uvicorn app:app --reload --port 8000
+```
+
+On first run it creates `audit_records` and `users` tables automatically
+(see the `lifespan` handler in `app.py`).
+
+### Routes worth knowing
+
+| Route | Auth | Notes |
+|---|---|---|
+| `POST /register`, `POST /token` | — | JWT username/password auth |
+| `POST /api/v1/audit`, `/api/v1/audit/pdf`, `GET /api/v1/audits` | JWT | Authenticated audit history |
+| `POST /api/audit` | **x402** | Public endpoint `VailAudit.html` calls. Returns `402` until a valid Algorand Testnet payment is attached, then runs the audit and stores it. |
+
+## 2. Frontend setup
+
+The frontend is a static page (`VailAudit.html`) plus a small bundled JS
+module that handles wallet connection and the x402 payment flow.
+
+```bash
+npm install
+npm run build     # bundles src/x402-client.js -> dist/x402-client.bundle.js
+```
+
+Then serve the folder (not `file://`, since the page loads
+`dist/x402-client.bundle.js` via `<script src>`):
+
+```bash
+python -m http.server 5500
+# open http://localhost:5500/VailAudit.html
+```
+
+If you change `API_BASE_URL` inside `VailAudit.html` (defaults to
+`http://localhost:8000`), point it at wherever `uvicorn` is running.
+
+## 3. Demoing the live x402 flow
+
+1. Fund your Algorand **testnet** wallet (Pera/Defly/etc.) with test
+   ALGO — use the [Algorand testnet dispenser](https://bank.testnet.algorand.network/).
+2. Start the backend (`uvicorn app:app --reload`) and serve the frontend.
+3. Open `VailAudit.html`, click **Connect Wallet**, approve the connection
+   in your wallet app.
+4. Paste a sample resume (or use **Load Sample**) and click **Run Privacy
+   Audit**. The page will:
+   - hit `POST /api/audit`, get `402 Payment Required`,
+   - ask your wallet to sign the payment via `x402Client.fetch()`,
+   - resend the request with the signed payment attached,
+   - show `[Payment] Settled on Algorand Testnet…` in the terminal log
+     once the facilitator confirms.
+5. Verify the settled transaction on [Lora Testnet Explorer](https://lora.algokit.io/testnet)
+   using your `AVM_ADDRESS`.
+
+## 4. Troubleshooting
+
+- **`AVM_ADDRESS environment variable is required`** — set it in `.env`
+  before starting `app.py`.
+- **Wallet button does nothing / `Connect an Algorand testnet wallet
+  first.`** — run `npm run build` first; `VailAudit.html` loads the
+  wallet/payment logic from `dist/x402-client.bundle.js`, which doesn't
+  exist until you build it.
+- **Stuck on `402` after signing** — check `FACILITATOR_URL` is reachable
+  and that your wallet is actually on Testnet (chain ID `416002`), not
+  Mainnet.
+- **CORS errors** — `app.py` currently allows all origins
+  (`allow_origins=["*"]`) so the static HTML can be opened from anywhere;
+  tighten this before deploying publicly.

@@ -340,6 +340,7 @@ footer{ position:relative; z-index:1; padding:60px 48px 34px; border-top:1px sol
     <li><a href="#demo">Live Demo</a></li>
     <li><a href="#features">Features</a></li>
   </ul>
+  <button class="nav-cta" id="walletBtn">Connect Wallet</button>
   <button class="nav-cta" onclick="document.getElementById('demo').scrollIntoView()">Try It</button>
 </nav>
 
@@ -424,6 +425,10 @@ footer{ position:relative; z-index:1; padding:60px 48px 34px; border-top:1px sol
           <option value="Professor">Professor</option>
         </select>
       </div>
+      <div class="job-role-row" id="walletRow">
+        <label>Payment (x402 · Algorand Testnet)</label>
+        <span id="walletStatus" style="font-size:13px;color:var(--text-1);">Not connected — required to pay for an audit</span>
+      </div>
       <div class="demo-actions">
         <button class="btn-ghost" id="sampleBtn">Load Sample</button>
         <button class="btn-primary" id="runBtn">Run Privacy Audit →</button>
@@ -485,6 +490,15 @@ footer{ position:relative; z-index:1; padding:60px 48px 34px; border-top:1px sol
 </footer>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+
+<!-- ==========================================
+     x402 PAYMENT CLIENT (Algorand Testnet, GoPlausible facilitator)
+     Bundled from src/x402-client.js via `npm run build` (esbuild) — see
+     package.json. Rebuild after any change to src/x402-client.js or after
+     bumping the @x402-avm/* package versions.
+     ========================================== -->
+<script src="dist/x402-client.bundle.js"></script>
+
 <script>
 // ---------- Backend config ----------
 // Point this at wherever you deploy the FastAPI backend (see /backend README).
@@ -741,16 +755,18 @@ const resultsWrap = document.getElementById('resultsWrap');
 const jobRoleSelect = document.getElementById('jobRoleSelect');
 const reviewTextEl = document.getElementById('reviewText');
 
-// Try the real backend first; if it's unreachable, fall back to the
-// local browser-only mock so this page still works standalone.
-async function callBackendAudit(jobRole, { text, file }){
+// Try the real backend first; if it's unreachable (or the wallet isn't
+// connected / payment fails), fall back to the local browser-only mock so
+// this page still works standalone. /api/audit is x402-gated, so a real
+// call here signs and settles a testnet payment via the connected wallet
+// before the backend will process the audit.
+async function callBackendAudit(jobRole, { text, file }, onStatus){
   const form = new FormData();
   form.append('job_role', jobRole);
   if(file){ form.append('file', file); } else { form.append('text', text); }
 
-  const resp = await fetch(`${API_BASE_URL}/api/audit`, { method:'POST', body: form });
-  if(!resp.ok) throw new Error(`Backend responded ${resp.status}`);
-  return resp.json(); // { sanitized_text, entity_types, entities_redacted, scores:[{label,score}], review, ... }
+  return window.x402CallBackendAudit(API_BASE_URL, form, onStatus);
+  // { sanitized_text, entity_types, entities_redacted, scores:[{label,score}], review, ... }
 }
 
 runBtn.addEventListener('click', async ()=>{
@@ -785,7 +801,7 @@ runBtn.addEventListener('click', async ()=>{
     const payload = activeMode === 'pdf'
       ? { file: pdfInput.files[0] }
       : { text: raw };
-    const result = await callBackendAudit(jobRole, payload);
+    const result = await callBackendAudit(jobRole, payload, (msg) => typeLines([msg], 350));
 
     out = result.sanitized_text;
     entityCount = result.entities_redacted;
@@ -798,8 +814,11 @@ runBtn.addEventListener('click', async ()=>{
     await typeLines([`[Agent 2] Scored via backend (${result.llm_provider}).`], 550);
     await typeLines([`[System] Audit complete. 0 PII fields exposed to the evaluation model.`], 400);
   }catch(err){
-    console.warn('Backend unreachable, using local mock:', err);
-    await typeLines(['[System] Backend unreachable — using local mock instead.'], 400);
+    console.warn('Backend/payment unavailable, using local mock:', err);
+    const reason = /wallet/i.test(err?.message || '')
+      ? '[Payment] No wallet connected — using local mock instead.'
+      : '[System] Backend unreachable — using local mock instead.';
+    await typeLines([reason], 400);
     await typeLines(['[Agent 2] Loading local evaluation model (Llama 3 via Ollama)…'], 500);
     await typeLines(['[Agent 2] Scoring content on merit only — no identity signals present.'], 600);
 

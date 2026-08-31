@@ -1,0 +1,12 @@
+@perawallet/walletconnect
+Copyright 2026 Pera Wallet
+
+This product is a fork and modernization of WalletConnect v1.x
+(https://github.com/WalletConnect/walletconnect-monorepo),
+Copyright 2020 WalletConnect, licensed under the Apache License 2.0.
+
+It includes reimplementations of the following MIT-licensed WalletConnect
+helper packages, vendored as internal modules:
+  @walletconnect/safe-json, @walletconnect/window-getters,
+  @walletconnect/window-metadata, @walletconnect/encoding,
+  @walletconnect/jsonrpc-utils (payloadId), @walletconnect/crypto (API shape)

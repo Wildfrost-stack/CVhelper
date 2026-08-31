@@ -1,10 +1,31 @@
-fastapi
-uvicorn[standard]
-python-multipart
-sqlalchemy
-asyncpg
-passlib[bcrypt]
-pyjwt
-pypdf
-python-dotenv
-groq
+# ==========================================
+# Backend dependencies — Privacy-Preserving Agentic Resume Auditor
+# Python 3.11+ recommended
+# ==========================================
+
+# --- Web framework / server ---
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9        # required by FastAPI's Form()/File() parsing
+
+# --- Auth ---
+pyjwt>=2.9.0
+passlib[bcrypt]>=1.7.4
+
+# --- Database (async) ---
+sqlalchemy[asyncio]>=2.0.30
+asyncpg>=0.29.0                # async PostgreSQL driver used by DATABASE_URL
+
+# --- PDF parsing ---
+pypdf>=4.2.0
+
+# --- Validation ---
+pydantic>=2.7.0
+
+# --- LLM agents (ai.py) ---
+groq>=0.11.0
+python-dotenv>=1.0.1
+
+# --- x402 payments (Algorand/AVM via GoPlausible facilitator) ---
+# httpx extra pulls in the async HTTP client x402's facilitator client needs
+x402[httpx]>=0.2.0
