@@ -5,7 +5,7 @@
   "description": "CVhelper / VailAudit frontend — x402 payment client for the Algorand Testnet, settled via the GoPlausible facilitator.",
   "type": "module",
   "scripts": {
-    "build": "esbuild src/x402-client.js --bundle --format=iife --outfile=dist/x402-client.bundle.js",
+    "build": "esbuild src/x402-client.js --bundle --format=iife --outfile=src/dist/x402-client.bundle.js",
     "watch": "npm run build -- --watch"
   },
   "dependencies": {
