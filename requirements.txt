@@ -28,4 +28,4 @@ python-dotenv>=1.0.1
 
 # --- x402 payments (Algorand/AVM via GoPlausible facilitator) ---
 # httpx extra pulls in the async HTTP client x402's facilitator client needs
-x402[httpx]>=0.2.0
+x402-avm[httpx]>=0.2.0
