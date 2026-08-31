@@ -3,6 +3,10 @@ import re
 import asyncio
 from pathlib import Path
 from dotenv import load_dotenv
+
+# Load .env explicitly (don't rely on it being loaded as a side effect of
+# importing ai.py). override=False keeps any real environment variables
+# (e.g. set in your shell or a deployment platform) taking precedence.
 load_dotenv(override=False)
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
@@ -206,14 +210,14 @@ app.add_middleware(PaymentMiddlewareASGI, routes=_x402_routes, server=_x402_serv
 # ==========================================
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  
-    allow_credentials=False, 
+    allow_origins=["*"],  # cvhelper.html may be opened directly from disk or any static server
+    allow_credentials=False,  # no cookies are used, so a wildcard origin is allowed
     allow_methods=["*"],
     allow_headers=["*"],
 )
 # ==========================================
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
 async def root():
     return {
         "status": "ok",
@@ -302,7 +306,7 @@ async def login_for_access_token(
     "/api/v1/audit", 
     response_model=AuditResponse, 
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(get_current_user)]  
+    dependencies=[Depends(get_current_user)]  # Enforces auth without creating an unused parameter
 )
 async def process_and_store_audit(
     payload: AuditCreateRequest, 
@@ -341,7 +345,7 @@ async def process_and_store_audit(
 @app.get(
     "/api/v1/audits", 
     response_model=List[AuditResponse],
-    dependencies=[Depends(get_current_user)] 
+    dependencies=[Depends(get_current_user)]  # Enforces auth without creating an unused parameter
 )
 async def list_audits(
     skip: int = 0, 
