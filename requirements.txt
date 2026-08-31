@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+python-multipart
+sqlalchemy
+asyncpg
+passlib[bcrypt]
+pyjwt
+pypdf
+python-dotenv
+groq
